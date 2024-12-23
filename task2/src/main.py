@@ -1,14 +1,10 @@
-import pandas as pd
-import numpy as np
-import os
-import re
+from transformers import BertTokenizer, TFBertForSequenceClassification, create_optimizer
 from sklearn.model_selection import train_test_split
-from tensorflow.keras.preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout, Bidirectional
-from tensorflow.keras.callbacks import EarlyStopping
-import pickle
+from sklearn.metrics import classification_report
+import pandas as pd
+import re
+import numpy as np
+from natasha import Doc, Segmenter, NewsMorphTagger, NewsEmbedding
 
 # Путь к датасету
 DATASET_PATH = r'D:\PyCharm Community Edition 2024.1.4\24HACK\TIDIHack\task2\datasets\Dataset_labeled.csv'
@@ -21,65 +17,93 @@ def load_data(dataset_path):
     return data
 
 # Предобработка текста
+segmenter = Segmenter()
+morph_tagger = NewsMorphTagger(NewsEmbedding())
+
 def preprocess_text(text):
     text = re.sub(r'[^\w\s]', '', text)  # Удаление пунктуации
     text = re.sub(r'\d+', '', text)  # Удаление чисел
     text = text.lower()  # Приведение к нижнему регистру
-    return text
+    doc = Doc(text)
+    doc.segment(segmenter)
+    doc.tag_morph(morph_tagger)
+    lemmas = [token.lemma for token in doc.tokens if token.pos not in {'PUNCT', 'NUM'} and token.lemma is not None]
+    return ' '.join(lemmas)
 
-# Подготовка данных
-def prepare_data(data, max_words=10000, max_len=100):
-    tokenizer = Tokenizer(num_words=max_words, oov_token='<OOV>')
-    tokenizer.fit_on_texts(data['comment'])
-    sequences = tokenizer.texts_to_sequences(data['comment'])
-    padded_sequences = pad_sequences(sequences, maxlen=max_len, padding='post', truncating='post')
-    return padded_sequences, tokenizer
+# Подготовка данных с помощью BERT Tokenizer
+def prepare_data_with_bert(data, tokenizer, max_len=128):
+    encodings = tokenizer(
+        data['comment'].tolist(),
+        truncation=True,
+        padding=True,
+        max_length=max_len,
+        return_tensors='tf'
+    )
+    return encodings
 
-# Создание модели
-def build_model(vocab_size, embedding_dim=64, input_length=100):
-    model = Sequential([
-        Embedding(vocab_size, embedding_dim, input_length=input_length),
-        Bidirectional(LSTM(64, return_sequences=True)),
-        Dropout(0.3),
-        Bidirectional(LSTM(32)),
-        Dense(32, activation='relu'),
-        Dropout(0.3),
-        Dense(1, activation='sigmoid')
-    ])
-    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-    return model
-
-# Основная часть
 if __name__ == '__main__':
-    #Загрузка и предобработка данных
+    # Загрузка и предобработка данных
     data = load_data(DATASET_PATH)
     data['comment'] = data['comment'].apply(preprocess_text)
 
-    #Подготовка данных
-    MAX_WORDS = 10000
-    MAX_LEN = 100
-    X, tokenizer = prepare_data(data, max_words=MAX_WORDS, max_len=MAX_LEN)
-    y = data['toxic'].values
+    # Подготовка данных
+    MAX_LEN = 128
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    encodings = prepare_data_with_bert(data, tokenizer, max_len=MAX_LEN)
 
-    #Разделение данных
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X = encodings['input_ids'].numpy()
+    X_attention_masks = encodings['attention_mask'].numpy()
+    y = data['toxic'].astype(int).values
 
-    #Создание модели
-    model = build_model(vocab_size=MAX_WORDS, embedding_dim=64, input_length=MAX_LEN)
+    # Проверка форм данных
+    print(f"Shapes: X={X.shape}, X_attention_masks={X_attention_masks.shape}, y={y.shape}")
 
-    #Обучение модели
-    early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
-    model.fit(
-        X_train, y_train,
-        validation_data=(X_test, y_test),
-        epochs=12,
-        batch_size=32,
-        callbacks=[early_stopping]
+    # Разделение данных
+    X_train, X_test, X_mask_train, X_mask_test, y_train, y_test = train_test_split(
+        X, X_attention_masks, y, test_size=0.2, random_state=42
     )
-    # Сохраняем токенизатор
-    with open('./models/tokenizer.pickle', 'wb') as handle:
-        pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    #Сохранение модели
-    model.save('./models/toxic_model.h5')
-    print("Модель успешно сохранена!")
+    # Проверка форм данных после разделения
+    print(f"Train/Test split shapes: X_train={X_train.shape}, y_train={y_train.shape}")
+
+    # Создание модели BERT
+    model = TFBertForSequenceClassification.from_pretrained(
+        'bert-base-uncased',
+        num_labels=2
+    )
+
+    batch_size = 32
+    num_train_steps = (len(X_train) // batch_size) * 5  # количество эпох: 3
+    optimizer, _ = create_optimizer(
+        init_lr=5e-5,
+        num_train_steps=num_train_steps,
+        num_warmup_steps=0
+    )
+
+    model.compile(
+        optimizer=optimizer,
+        loss='sparse_categorical_crossentropy',  # Используем явное указание функции потерь
+        metrics=['accuracy']
+    )
+
+    # Обучение модели
+    history = model.fit(
+        {'input_ids': X_train, 'attention_mask': X_mask_train},
+        y_train,
+        validation_data=(
+            {'input_ids': X_test, 'attention_mask': X_mask_test},
+            y_test
+        ),
+        epochs=5,
+        batch_size=batch_size
+    )
+
+    # Тестирование и оценка
+    y_pred_logits = model.predict({'input_ids': X_test, 'attention_mask': X_mask_test})['logits']
+    y_pred = (y_pred_logits.argmax(axis=-1)).astype('int32')
+    print(classification_report(y_test, y_pred))
+
+    # Сохранение модели
+    model.save_pretrained('./models/bert_toxic_model')
+    tokenizer.save_pretrained('./models/bert_tokenizer')
+    print("Модель и токенизатор успешно сохранены!")
