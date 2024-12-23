@@ -1,49 +1,67 @@
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
+from transformers import BertTokenizer, TFBertForSequenceClassification
 import tensorflow as tf
-import pickle
 import pandas as pd
-from sklearn.metrics import f1_score
+import re
+from natasha import Doc, Segmenter, NewsMorphTagger, NewsEmbedding
 
-# Загрузка сохраненного токенизатора
-with open('./models/tokenizer.pickle', 'rb') as handle:
-    tokenizer = pickle.load(handle)
-# Загрузка модели
-model = load_model('./models/toxic_model.h5')
+# Предобработка текста
+segmenter = Segmenter()
+morph_tagger = NewsMorphTagger(NewsEmbedding())
 
-# Проверка структуры модели
-model.summary()
+def preprocess_text(text):
+    text = re.sub(r'[^\w\s]', '', text)  # Удаление пунктуации
+    text = re.sub(r'\d+', '', text)  # Удаление чисел
+    text = text.lower()  # Приведение к нижнему регистру
+    doc = Doc(text)
+    doc.segment(segmenter)
+    doc.tag_morph(morph_tagger)
+    lemmas = [token.lemma for token in doc.tokens if token.pos not in {'PUNCT', 'NUM'} and token.lemma is not None]
+    return ' '.join(lemmas)
 
-# Предполагается, что токенайзер был обучен на данных при обучении модели
-# Если токенайзер был сохранен, его нужно загрузить. Например:
+# Функция для загрузки данных из .txt файла
+def load_unlabeled_data(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    return pd.DataFrame({'comment': [line.strip() for line in lines]})
 
+# Разметка данных с помощью обученной модели
+def label_data_with_model(model, tokenizer, data, max_len=128):
+    # Предобработка текста
+    data['comment'] = data['comment'].apply(preprocess_text)
 
-# В случае, если токенизатор не был сохранен, нужно использовать тот же код для его обучения:
-# Пример текста для предсказания
-sample_text = ["И ещё один, какая же русня дегенераты пиздец просто.", " "]
+    # Токенизация
+    encodings = tokenizer(
+        data['comment'].tolist(),
+        truncation=True,
+        padding=True,
+        max_length=max_len,
+        return_tensors='tf'
+    )
 
-# Подготовка данных
-# Если токенизатор обучался раньше, его необходимо использовать:
-# tokenizer = Tokenizer(num_words=10000)  # или загрузить ранее обученный токенизатор
-# tokenizer.fit_on_texts(sample_text)  # Обучаем токенизатор на тестовых данных (для примера)
+    # Предсказание
+    predictions = model.predict({
+        'input_ids': encodings['input_ids'],
+        'attention_mask': encodings['attention_mask']
+    })['logits']
+    data['toxic'] = tf.nn.softmax(predictions, axis=-1).numpy()[:, 1] > 0.5  # Метка токсичности
+    return data
 
-# Преобразуем текст в последовательности и применяем паддинг
-sequences = tokenizer.texts_to_sequences(sample_text)
-padded_sequences = pad_sequences(sequences, maxlen=100)
+if __name__ == '__main__':
+    # Пути к модели, токенизатору и данным
+    MODEL_PATH = './models/bert_toxic_model'
+    TOKENIZER_PATH = './models/bert_tokenizer'
+    # поменять пути
+    UNLABELED_DATA_PATH = 'D:/PyCharm Community Edition 2024.1.4/24HACK/TIDIHack/task2/datasets/Dataset_2_unlabeled.txt'
+    OUTPUT_PATH = 'D:/PyCharm Community Edition 2024.1.4/24HACK/TIDIHack/task2/datasets/labeled_data.csv'
 
-# Прогнозирование с моделью
-predictions = model.predict(padded_sequences)
+    # Загрузка модели и токенизатора
+    model = TFBertForSequenceClassification.from_pretrained(MODEL_PATH)  # Загрузка модели из .h5 файла
+    tokenizer = BertTokenizer.from_pretrained(TOKENIZER_PATH)
 
-# Вывод предсказаний
-print(predictions)
+    # Загрузка и разметка неразмеченных данных
+    data = load_unlabeled_data(UNLABELED_DATA_PATH)
+    labeled_data = label_data_with_model(model, tokenizer, data)
 
-DATASET_PATH = '../datasets/Dataset_labeled.csv'
-
-data = pd.read_csv(DATASET_PATH)
-data = data[['comment', 'toxic']].iloc[int(len(data)/2):, :]
-data.dropna(inplace=True)
-sequences = tokenizer.texts_to_sequences(data['comment'])
-padded_sequences = pad_sequences(sequences, maxlen=100)
-predictions = tf.round(model.predict(padded_sequences))
-print(f1_score(data['toxic'], predictions))
+    # Сохранение размеченных данных
+    labeled_data.to_csv(OUTPUT_PATH, index=False, encoding='utf-8')
+    print(f"Размеченные данные сохранены в {OUTPUT_PATH}!")
