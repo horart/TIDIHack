@@ -3,20 +3,20 @@ import numpy as np
 import os
 import re
 from sklearn.model_selection import train_test_split
-from tensorflow.keras.preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout, Bidirectional
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.preprocessing.text import Tokenizer # type: ignore
+from tensorflow.keras.preprocessing.sequence import pad_sequences # type: ignore
+from tensorflow.keras.models import Sequential # type: ignore
+from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout, Bidirectional # type: ignore
+from tensorflow.keras.callbacks import EarlyStopping # type: ignore
 import pickle
 
 # Путь к датасету
-DATASET_PATH = r'D:\PyCharm Community Edition 2024.1.4\24HACK\TIDIHack\task2\datasets\Dataset_labeled.csv'
+DATASET_PATH = '../datasets/Dataset_labeled.csv'
 
 # Загрузка данных
 def load_data(dataset_path):
     data = pd.read_csv(dataset_path)
-    data = data[['comment', 'toxic']]
+    data = data[['comment', 'toxic']].iloc[:int(len(data)/2), :]
     data.dropna(inplace=True)
     return data
 
@@ -57,7 +57,7 @@ if __name__ == '__main__':
 
     #Подготовка данных
     MAX_WORDS = 10000
-    MAX_LEN = 100
+    MAX_LEN = 200
     X, tokenizer = prepare_data(data, max_words=MAX_WORDS, max_len=MAX_LEN)
     y = data['toxic'].values
 
