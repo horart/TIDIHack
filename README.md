@@ -1,4 +1,4 @@
-# TIDIHack. Мануал по мини-хакатону.
+![image](https://github.com/user-attachments/assets/50c08acf-81f7-4f17-836b-c58628f4035d)# TIDIHack. Мануал по мини-хакатону.
 
 
 ## Организаторы:
@@ -34,6 +34,7 @@
 Если у Вас не установлен Jupyter, откройте консоль и введите команду `pip install jupyterlab notebook` 
 
 
+
 ## Начало работы
 
 
@@ -56,3 +57,6 @@
 
 
 Когда будет приходить время, здесь будут появляться ссылки на загрузку решений. Можете использовать QR-код, который вы видите на экране. :)
+
+
+Ссылка для загрузки 1 кейса: https://docs.google.com/forms/d/e/1FAIpQLSccz4giaQL53m4Kj7oAWQuyXUZtTJuw-p9qMXASbAaBnO_mmA/viewform?usp=header
